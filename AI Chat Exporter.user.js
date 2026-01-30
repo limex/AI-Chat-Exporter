@@ -874,7 +874,7 @@
           // Section header - always keep anchor for TOC navigation
           content +=
             `### chat-${exportChatIndex}\n\n> ` +
-            msg.contentText.replace(/\n/g, "\n> ") +
+            msg.contentText.split("\n").filter(line => line.trim() !== "").join("\n> ") +
             "\n\n";
         } else {
           let markdownContent;
