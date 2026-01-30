@@ -2,7 +2,7 @@
 
 A userscript for exporting AI chat conversations to Markdown format.
 
-## Changes from Original from revivalstack
+## Changes from Original of revivalstack
 
 ### Core Features
 - Added copy-to-clipboard functionality with Clipboard API and fallback support
