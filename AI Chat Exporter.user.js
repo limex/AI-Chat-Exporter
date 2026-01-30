@@ -18,19 +18,20 @@
   "use strict";
 
   // --- Global Constants ---
-  const EXPORTER_VERSION = "2.7.1";
   const EXPORT_CONTAINER_ID = "export-controls-container";
   const OUTLINE_CONTAINER_ID = "export-outline-container"; // ID for the outline div
   const DOM_READY_TIMEOUT = 1000;
-  const EXPORT_BUTTON_TITLE_PREFIX = `AI Chat Exporter v${EXPORTER_VERSION}`;
+  const EXPORT_BUTTON_TITLE_PREFIX = "AI Chat Exporter";
   const ALERT_CONTAINER_ID = "exporter-alert-container";
   const HIDE_ALERT_FLAG = "exporter_hide_scroll_alert"; // Local Storage flag
-  const ALERT_AUTO_CLOSE_DURATION = 30000; // 30 seconds
+  const ALERT_AUTO_CLOSE_DURATION = 2000; // 2 seconds
   const OUTLINE_COLLAPSED_STATE_KEY = "outline_is_collapsed"; // Local Storage key for collapsed state
   const AUTOSCROLL_INITIAL_DELAY = 2000; // Initial delay before starting auto-scroll (X seconds)
   const OUTLINE_TITLE_ID = "ai-chat-exporter-outline-title";
   const OUTPUT_FILE_FORMAT_DEFAULT = "{platform}_{title}_{timestampLocal}";
   const GM_OUTPUT_FILE_FORMAT = "aiChatExporter_fileFormat";
+  const GM_INCLUDE_FRONTMATTER = "aiChatExporter_includeFrontmatter";
+  const GM_PRINT_CHATNUMBER = "aiChatExporter_printChatnumber";
 
   // --- Font Stack for UI Elements ---
   const FONT_STACK = `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"`;
@@ -441,7 +442,6 @@
       const tagsArray = Array.isArray(tags) ? tags : [];
 
       const replacements = {
-        "{exporter}": EXPORTER_VERSION,
         "{platform}": CURRENT_PLATFORM,
         "{title}": title.slice(0, 70).toLocaleLowerCase(),
         "{timestamp}": new Date().toISOString(),
@@ -585,7 +585,6 @@
         messages: messages,
         messageCount: messages.filter((m) => m.author === "user").length, // Count user messages as questions
         exportedAt: new Date(),
-        exporterVersion: EXPORTER_VERSION,
         threadUrl: window.location.href,
       };
     },
@@ -667,7 +666,6 @@
         messages: messages,
         messageCount: messages.filter((m) => m.author === "user").length,
         exportedAt: new Date(),
-        exporterVersion: EXPORTER_VERSION,
         threadUrl: window.location.href,
       };
     },
@@ -741,7 +739,6 @@
         messages: messages,
         messageCount: messages.filter((m) => m.author === "user").length,
         exportedAt: new Date(),
-        exporterVersion: EXPORTER_VERSION,
         threadUrl: window.location.href,
       };
     },
@@ -841,7 +838,6 @@
         messages: messages,
         messageCount: messages.filter((m) => m.author === "user").length, // Count user messages as questions
         exportedAt: new Date(),
-        exporterVersion: EXPORTER_VERSION,
         threadUrl: window.location.href,
       };
     },
@@ -853,7 +849,7 @@
      * @param {TurndownService} turndownServiceInstance - Configured TurndownService.
      * @returns {{output: string, fileName: string}} Markdown string and filename.
      */
-    formatToMarkdown(chatData, turndownServiceInstance) {
+    formatToMarkdown(chatData, turndownServiceInstance, includeFrontmatter = true, printChatnumber = true) {
       let toc = "";
       let content = "";
       let exportChatIndex = 0; // Initialize to 0 for sequential user message numbering
@@ -865,9 +861,17 @@
             msg.contentText.replace(/\s+/g, " "),
             70
           );
-          toc += `- [${exportChatIndex}: ${Utils.escapeMd(
-            preview
-          )}](#chat-${exportChatIndex})\n`;
+          // Table of Contents - conditionally include chat number
+          if (printChatnumber) {
+            toc += `- [${exportChatIndex}: ${Utils.escapeMd(
+              preview
+            )}](#chat-${exportChatIndex})\n`;
+          } else {
+            toc += `- [${Utils.escapeMd(
+              preview
+            )}](#chat-${exportChatIndex})\n`;
+          }
+          // Section header - always keep anchor for TOC navigation
           content +=
             `### chat-${exportChatIndex}\n\n> ` +
             msg.contentText.replace(/\n/g, "\n> ") +
@@ -888,19 +892,24 @@
         // Removed the incorrect increment logic from here
       });
 
-      const localTime = Utils.formatLocalTime(chatData.exportedAt);
-
-      const yaml = `---\ntitle: ${chatData.title}\ntags: [${chatData.tags.join(
-        ", "
-      )}]\nauthor: ${chatData.author}\ncount: ${
-        chatData.messageCount
-      }\nexporter: ${EXPORTER_VERSION}\ndate: ${localTime}\nurl: ${
-        chatData.threadUrl
-      }\n---\n`;
       const tocBlock = `## Table of Contents\n\n${toc.trim()}\n\n`;
+      let finalOutput;
 
-      const finalOutput =
-        yaml + `\n# ${chatData.title}\n\n` + tocBlock + content.trim() + "\n\n";
+      if (includeFrontmatter) {
+        const localTime = Utils.formatLocalTime(chatData.exportedAt);
+        const yaml = `---\ntitle: ${chatData.title}\ntags: [${chatData.tags.join(
+          ", "
+        )}]\nauthor: ${chatData.author}\ncount: ${
+          chatData.messageCount
+        }\ndate: ${localTime}\nurl: ${
+          chatData.threadUrl
+        }\n---\n`;
+        finalOutput =
+          yaml + `\n# ${chatData.title}\n\n` + tocBlock + content.trim() + "\n\n";
+      } else {
+        finalOutput =
+          `# ${chatData.title}\n\n` + tocBlock + content.trim() + "\n\n";
+      }
 
       const fileName = Utils.formatFileName(
         GM_getValue(GM_OUTPUT_FILE_FORMAT, OUTPUT_FILE_FORMAT_DEFAULT),
@@ -941,7 +950,6 @@
         tags: chatData.tags,
         author: chatData.author,
         count: chatData.messageCount,
-        exporter: EXPORTER_VERSION,
         date: chatData.exportedAt.toISOString(),
         url: chatData.threadUrl,
         messages: chatData.messages.map((msg) => ({
@@ -1475,9 +1483,13 @@
 
       if (format === "markdown") {
         // Pass the filtered chat data to formatToMarkdown
+        const includeFrontmatter = GM_getValue(GM_INCLUDE_FRONTMATTER, true);
+        const printChatnumber = GM_getValue(GM_PRINT_CHATNUMBER, true);
         const markdownResult = ChatExporter.formatToMarkdown(
           chatDataForExport,
-          turndownServiceInstance
+          turndownServiceInstance,
+          includeFrontmatter,
+          printChatnumber
         );
         fileOutput = markdownResult.output;
         fileName = markdownResult.fileName;
@@ -1597,9 +1609,13 @@
       turndownServiceInstance = new TurndownService();
       ChatExporter.setupTurndownRules(turndownServiceInstance);
 
+      const includeFrontmatter = GM_getValue(GM_INCLUDE_FRONTMATTER, true);
+      const printChatnumber = GM_getValue(GM_PRINT_CHATNUMBER, true);
       const markdownResult = ChatExporter.formatToMarkdown(
         chatDataForExport,
-        turndownServiceInstance
+        turndownServiceInstance,
+        includeFrontmatter,
+        printChatnumber
       );
 
       if (!markdownResult || !markdownResult.output) {
@@ -1798,41 +1814,7 @@
         fontSize: "8px",
       });
       settingsButton.addEventListener("click", () => {
-        const currentFormat = GM_getValue(
-          GM_OUTPUT_FILE_FORMAT,
-          OUTPUT_FILE_FORMAT_DEFAULT
-        );
-        const newFormat = window.prompt(
-          `+++++++  ${EXPORT_BUTTON_TITLE_PREFIX}  +++++++\n\n ` +
-            `ENTER NEW FILENAME FORMAT:\n` +
-            ` • sample1: {platform}__{tag1}__{title}__{timestampLocal}\n` +
-            ` • sample2: {tag1}__{title}-v{exporter}-{timestamp}\n` +
-            ` • current: ${currentFormat}\n\n` +
-            `valid placeholders: \n  ` +
-            `- {platform}              : e.g. chatgpt, gemini\n  ` +
-            `- {title}                      : title, with tags removed\n  ` +
-            `- {timestamp}          : YYYY-MM-DDTHH-mm-ss.sssZ\n  ` +
-            `- {timestampLocal}: YYYY-MM-DDTHH-mm-ss[+/-]HHMM\n  ` +
-            `- {tags}                     : all tags, hyphen-separated\n  ` +
-            `- {tag1}                     : 1st tag\n  ` +
-            `- {tag2}                     : 2nd tag\n  ` +
-            `  ...\n  ` +
-            `- {tag9}                     : 9th tag\n  ` +
-            `- {exporter}             : AI Chat Exporter version\n`,
-          currentFormat
-        );
-
-        if (newFormat !== null && newFormat !== currentFormat) {
-          GM_setValue(GM_OUTPUT_FILE_FORMAT, newFormat);
-          alert("Filename format updated successfully!");
-          console.log("New filename format saved:", newFormat);
-        } else if (newFormat === currentFormat) {
-          // User clicked OK but didn't change the value, or entered same value
-          console.log("Filename format not changed.");
-        } else {
-          // User clicked Cancel
-          console.log("Filename format update cancelled.");
-        }
+        UIManager.showSettingsModal();
       });
       container.appendChild(settingsButton);
       // --- End Settings Button ---
@@ -1941,7 +1923,7 @@
       // Header for Chat Outline (always visible)
       const headerDiv = document.createElement("div");
       Utils.applyStyles(headerDiv, OUTLINE_HEADER_PROPS);
-      headerDiv.title = `AI Chat Exporter v${EXPORTER_VERSION}`;
+      headerDiv.title = "AI Chat Exporter";
       headerDiv.onclick = UIManager.toggleOutlineCollapse; // Only this div handles collapse
 
       const headerSpan = document.createElement("span");
@@ -2455,6 +2437,285 @@
           UIManager.alertTimeoutId = null; // Clear if not auto-hiding
         }
       }, ALERT_AUTO_CLOSE_DURATION); // Use the defined duration
+    },
+
+    /**
+     * Shows the settings modal dialog.
+     */
+    showSettingsModal() {
+      // Remove any existing modal
+      const existingModal = document.querySelector("#exporter-settings-modal");
+      if (existingModal) {
+        existingModal.remove();
+      }
+
+      // Create modal overlay
+      const modalOverlay = document.createElement("div");
+      modalOverlay.id = "exporter-settings-modal";
+      Utils.applyStyles(modalOverlay, {
+        position: "fixed",
+        top: "0",
+        left: "0",
+        width: "100%",
+        height: "100%",
+        backgroundColor: "rgba(0, 0, 0, 0.5)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: "10000",
+      });
+
+      // Create modal content box
+      const modalBox = document.createElement("div");
+      Utils.applyStyles(modalBox, {
+        backgroundColor: "white",
+        padding: "24px",
+        borderRadius: "12px",
+        boxShadow: "0 4px 20px rgba(0, 0, 0, 0.3)",
+        maxWidth: "600px",
+        width: "90%",
+        fontFamily: FONT_STACK,
+        color: "#333",
+      });
+
+      // Title
+      const title = document.createElement("h2");
+      title.textContent = `${EXPORT_BUTTON_TITLE_PREFIX} - Settings`;
+      Utils.applyStyles(title, {
+        marginTop: "0",
+        marginBottom: "20px",
+        fontSize: "18px",
+        color: "#5b3f87",
+      });
+      modalBox.appendChild(title);
+
+      // Get current values
+      const currentFormat = GM_getValue(
+        GM_OUTPUT_FILE_FORMAT,
+        OUTPUT_FILE_FORMAT_DEFAULT
+      );
+      const includeFrontmatter = GM_getValue(GM_INCLUDE_FRONTMATTER, true);
+      const printChatnumber = GM_getValue(GM_PRINT_CHATNUMBER, true);
+
+      // Filename format section
+      const filenameLabel = document.createElement("label");
+      filenameLabel.textContent = "Filename Format:";
+      Utils.applyStyles(filenameLabel, {
+        display: "block",
+        marginBottom: "8px",
+        fontWeight: "bold",
+        fontSize: "14px",
+      });
+      modalBox.appendChild(filenameLabel);
+
+      const filenameInput = document.createElement("input");
+      filenameInput.type = "text";
+      filenameInput.value = currentFormat;
+      Utils.applyStyles(filenameInput, {
+        width: "100%",
+        padding: "8px",
+        marginBottom: "8px",
+        borderRadius: "4px",
+        border: "1px solid #ccc",
+        fontSize: "13px",
+        fontFamily: "monospace",
+        boxSizing: "border-box",
+      });
+      modalBox.appendChild(filenameInput);
+
+      // Help text for filename format
+      const helpText = document.createElement("div");
+      Utils.applyStyles(helpText, {
+        marginBottom: "20px",
+        lineHeight: "1.4",
+        fontSize: "12px",
+        color: "#666",
+      });
+
+      helpText.textContent =
+        "Examples:\n" +
+        "• {platform}__{tag1}__{title}__{timestampLocal}\n" +
+        "• {tag1}__{title}-v{exporter}-{timestamp}\n\n" +
+        "Valid placeholders:\n" +
+        "• {platform} - e.g. chatgpt, gemini\n" +
+        "• {title} - title with tags removed\n" +
+        "• {timestamp} - YYYY-MM-DDTHH-mm-ss.sssZ\n" +
+        "• {timestampLocal} - YYYY-MM-DDTHH-mm-ss±HHMM\n" +
+        "• {tags} - all tags, hyphen-separated\n" +
+        "• {tag1} to {tag9} - individual tags\n" +
+        "• {exporter} - AI Chat Exporter version";
+
+      Utils.applyStyles(helpText, {
+        whiteSpace: "pre-line",
+      });
+      modalBox.appendChild(helpText);
+
+      // Frontmatter checkbox section
+      const frontmatterContainer = document.createElement("div");
+      Utils.applyStyles(frontmatterContainer, {
+        marginTop: "16px",
+        marginBottom: "20px",
+        padding: "12px",
+        backgroundColor: "#f5f5f5",
+        borderRadius: "6px",
+        border: "1px solid #ddd",
+      });
+
+      const frontmatterCheckbox = document.createElement("input");
+      frontmatterCheckbox.type = "checkbox";
+      frontmatterCheckbox.id = "include-frontmatter-checkbox";
+      frontmatterCheckbox.checked = includeFrontmatter;
+      Utils.applyStyles(frontmatterCheckbox, {
+        marginRight: "8px",
+        cursor: "pointer",
+      });
+
+      const frontmatterLabel = document.createElement("label");
+      frontmatterLabel.htmlFor = "include-frontmatter-checkbox";
+      frontmatterLabel.textContent = "Write and Copy Frontmatter";
+      Utils.applyStyles(frontmatterLabel, {
+        cursor: "pointer",
+        fontSize: "14px",
+        fontWeight: "bold",
+      });
+
+      const frontmatterHelp = document.createElement("div");
+      frontmatterHelp.textContent =
+        "When enabled, includes YAML frontmatter (title, tags, author, count, exporter, date, url) in markdown exports and clipboard copy.";
+      Utils.applyStyles(frontmatterHelp, {
+        color: "#666",
+        marginLeft: "24px",
+        display: "block",
+        marginTop: "4px",
+        fontSize: "12px",
+      });
+
+      frontmatterContainer.appendChild(frontmatterCheckbox);
+      frontmatterContainer.appendChild(frontmatterLabel);
+      frontmatterContainer.appendChild(frontmatterHelp);
+      modalBox.appendChild(frontmatterContainer);
+
+      // Print Chatnumber checkbox section
+      const chatnumberContainer = document.createElement("div");
+      Utils.applyStyles(chatnumberContainer, {
+        marginTop: "16px",
+        marginBottom: "20px",
+        padding: "12px",
+        backgroundColor: "#f5f5f5",
+        borderRadius: "6px",
+        border: "1px solid #ddd",
+      });
+
+      const chatnumberCheckbox = document.createElement("input");
+      chatnumberCheckbox.type = "checkbox";
+      chatnumberCheckbox.id = "print-chatnumber-checkbox";
+      chatnumberCheckbox.checked = printChatnumber;
+      Utils.applyStyles(chatnumberCheckbox, {
+        marginRight: "8px",
+        cursor: "pointer",
+      });
+
+      const chatnumberLabel = document.createElement("label");
+      chatnumberLabel.htmlFor = "print-chatnumber-checkbox";
+      chatnumberLabel.textContent = "Print Chatnumber";
+      Utils.applyStyles(chatnumberLabel, {
+        cursor: "pointer",
+        fontSize: "14px",
+        fontWeight: "bold",
+      });
+
+      const chatnumberHelp = document.createElement("div");
+      chatnumberHelp.textContent =
+        "When enabled, includes chat index numbers (e.g., \"1:\", \"2:\") in the table of contents and section headers of markdown exports.";
+      Utils.applyStyles(chatnumberHelp, {
+        color: "#666",
+        marginLeft: "24px",
+        display: "block",
+        marginTop: "4px",
+        fontSize: "12px",
+      });
+
+      chatnumberContainer.appendChild(chatnumberCheckbox);
+      chatnumberContainer.appendChild(chatnumberLabel);
+      chatnumberContainer.appendChild(chatnumberHelp);
+      modalBox.appendChild(chatnumberContainer);
+
+      // Buttons container
+      const buttonsContainer = document.createElement("div");
+      Utils.applyStyles(buttonsContainer, {
+        display: "flex",
+        justifyContent: "flex-end",
+        gap: "10px",
+        marginTop: "20px",
+      });
+
+      // Cancel button
+      const cancelButton = document.createElement("button");
+      cancelButton.textContent = "Cancel";
+      Utils.applyStyles(cancelButton, {
+        padding: "8px 16px",
+        backgroundColor: "#ccc",
+        color: "#333",
+        border: "none",
+        borderRadius: "6px",
+        cursor: "pointer",
+        fontSize: "14px",
+      });
+      cancelButton.onclick = () => modalOverlay.remove();
+
+      // Save button
+      const saveButton = document.createElement("button");
+      saveButton.textContent = "Save";
+      Utils.applyStyles(saveButton, {
+        padding: "8px 16px",
+        backgroundColor: "#5b3f87",
+        color: "white",
+        border: "none",
+        borderRadius: "6px",
+        cursor: "pointer",
+        fontSize: "14px",
+      });
+      saveButton.onclick = () => {
+        const newFormat = filenameInput.value.trim();
+        const newIncludeFrontmatter = frontmatterCheckbox.checked;
+        const newPrintChatnumber = chatnumberCheckbox.checked;
+
+        if (newFormat) {
+          GM_setValue(GM_OUTPUT_FILE_FORMAT, newFormat);
+          GM_setValue(GM_INCLUDE_FRONTMATTER, newIncludeFrontmatter);
+          GM_setValue(GM_PRINT_CHATNUMBER, newPrintChatnumber);
+          UIManager.showAlert("Settings saved successfully!", "success");
+          console.log("Settings saved:", {
+            format: newFormat,
+            includeFrontmatter: newIncludeFrontmatter,
+            printChatnumber: newPrintChatnumber,
+          });
+        } else {
+          UIManager.showAlert(
+            "Filename format cannot be empty!",
+            "error"
+          );
+          return;
+        }
+        modalOverlay.remove();
+      };
+
+      buttonsContainer.appendChild(cancelButton);
+      buttonsContainer.appendChild(saveButton);
+      modalBox.appendChild(buttonsContainer);
+
+      // Add box to overlay
+      modalOverlay.appendChild(modalBox);
+
+      // Close modal when clicking overlay (but not the box)
+      modalOverlay.onclick = (e) => {
+        if (e.target === modalOverlay) {
+          modalOverlay.remove();
+        }
+      };
+
+      // Add to document
+      document.body.appendChild(modalOverlay);
     },
 
     /**
