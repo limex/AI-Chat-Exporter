@@ -153,7 +153,7 @@
   };
 
   const BUTTON_BASE_PROPS = {
-    padding: "10px 14px",
+    padding: "5px 14px",
     backgroundColor: "#5b3f87", // Primary brand color
     color: "white",
     border: "none",
@@ -1500,6 +1500,149 @@
         Utils.downloadFile(fileName, fileOutput, mimeType);
       }
     },
+
+    /**
+     * Copies markdown-formatted chat content to clipboard.
+     * Reuses the same message selection logic as initiateExport.
+     */
+    async copyToClipboard() {
+      // Use the _currentChatData that matches the outline's IDs
+      const rawChatData = ChatExporter._currentChatData;
+      let turndownServiceInstance = null;
+
+      if (!rawChatData || rawChatData.messages.length === 0) {
+        UIManager.showAlert("No messages found to copy.", "error");
+        return;
+      }
+
+      // --- Refresh ChatExporter._selectedMessageIds from current UI state and visibility ---
+      ChatExporter._selectedMessageIds.clear(); // Clear previous state
+      const outlineContainer = document.querySelector(
+        `#${OUTLINE_CONTAINER_ID}`
+      );
+      if (outlineContainer) {
+        // Only consider checkboxes that are checked AND visible
+        const checkedVisibleCheckboxes = outlineContainer.querySelectorAll(
+          ".outline-item-checkbox:checked"
+        );
+
+        checkedVisibleCheckboxes.forEach((cb) => {
+          // Ensure the parent element is actually visible before adding to selected
+          const parentItemDiv = cb.closest("div");
+          if (
+            parentItemDiv &&
+            window.getComputedStyle(parentItemDiv).display !== "none" &&
+            cb.dataset.messageId
+          ) {
+            ChatExporter._selectedMessageIds.add(cb.dataset.messageId);
+          }
+        });
+
+        // Also, manually add AI responses that follow selected *and visible* user messages.
+        const visibleUserMessageIds = new Set();
+        checkedVisibleCheckboxes.forEach((cb) => {
+          const parentItemDiv = cb.closest("div");
+          if (
+            parentItemDiv &&
+            window.getComputedStyle(parentItemDiv).display !== "none" &&
+            cb.dataset.messageId
+          ) {
+            visibleUserMessageIds.add(cb.dataset.messageId);
+          }
+        });
+
+        rawChatData.messages.forEach((msg, index) => {
+          if (msg.author === "ai") {
+            let prevUserMessageId = null;
+            for (let i = index - 1; i >= 0; i--) {
+              if (rawChatData.messages[i].author === "user") {
+                prevUserMessageId = rawChatData.messages[i].id;
+                break;
+              }
+            }
+            if (
+              prevUserMessageId &&
+              visibleUserMessageIds.has(prevUserMessageId)
+            ) {
+              ChatExporter._selectedMessageIds.add(msg.id);
+            }
+          }
+        });
+      }
+      // --- End Refresh ---
+
+      // --- Filter messages based on selection ---
+      const filteredMessages = rawChatData.messages.filter((msg) =>
+        ChatExporter._selectedMessageIds.has(msg.id)
+      );
+
+      if (filteredMessages.length === 0) {
+        UIManager.showAlert(
+          "No messages selected or visible to copy. Please check at least one question in the outline or clear your search filter.",
+          "error"
+        );
+        return;
+      }
+
+      // Create a new chatData object for the filtered export
+      const chatDataForExport = {
+        ...rawChatData,
+        messages: filteredMessages,
+        messageCount: filteredMessages.filter((m) => m.author === "user")
+          .length,
+        exportedAt: new Date(),
+      };
+
+      // Setup TurndownService and format to markdown
+      turndownServiceInstance = new TurndownService();
+      ChatExporter.setupTurndownRules(turndownServiceInstance);
+
+      const markdownResult = ChatExporter.formatToMarkdown(
+        chatDataForExport,
+        turndownServiceInstance
+      );
+
+      if (!markdownResult || !markdownResult.output) {
+        UIManager.showAlert("Failed to generate markdown content.", "error");
+        return;
+      }
+
+      // Copy to clipboard
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          // Modern Clipboard API
+          await navigator.clipboard.writeText(markdownResult.output);
+          UIManager.showAlert("Markdown copied to clipboard!", "success");
+        } else {
+          // Fallback for older browsers using execCommand
+          const textArea = document.createElement("textarea");
+          textArea.value = markdownResult.output;
+          textArea.style.position = "fixed";
+          textArea.style.left = "-999999px";
+          textArea.style.top = "-999999px";
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          const successful = document.execCommand("copy");
+          document.body.removeChild(textArea);
+
+          if (successful) {
+            UIManager.showAlert("Markdown copied to clipboard!", "success");
+          } else {
+            UIManager.showAlert(
+              "Failed to copy to clipboard. Please try again.",
+              "error"
+            );
+          }
+        }
+      } catch (err) {
+        console.error("Copy to clipboard failed:", err);
+        UIManager.showAlert(
+          "Failed to copy to clipboard. Please try again.",
+          "error"
+        );
+      }
+    },
   };
 
   // --- Injected CSS for Theme Overrides ---
@@ -1616,15 +1759,26 @@
 
       const markdownButton = document.createElement("button");
       markdownButton.id = "export-markdown-btn";
-      markdownButton.textContent = "⬇ Export MD";
+      markdownButton.textContent = "MD";
       markdownButton.title = `${EXPORT_BUTTON_TITLE_PREFIX}: Export to Markdown`;
       Utils.applyStyles(markdownButton, BUTTON_BASE_PROPS);
       markdownButton.onclick = () => ChatExporter.initiateExport("markdown");
       container.appendChild(markdownButton);
 
+      const copyButton = document.createElement("button");
+      copyButton.id = "export-copy-btn";
+      copyButton.textContent = "COPY";
+      copyButton.title = `${EXPORT_BUTTON_TITLE_PREFIX}: Copy to Clipboard as Markdown`;
+      Utils.applyStyles(copyButton, {
+        ...BUTTON_BASE_PROPS,
+        ...BUTTON_SPACING_PROPS,
+      });
+      copyButton.onclick = () => ChatExporter.copyToClipboard();
+      container.appendChild(copyButton);
+
       const jsonButton = document.createElement("button");
       jsonButton.id = "export-json-btn";
-      jsonButton.textContent = "⬇ JSON";
+      jsonButton.textContent = "JSON";
       jsonButton.title = `${EXPORT_BUTTON_TITLE_PREFIX}: Export to JSON`;
       Utils.applyStyles(jsonButton, {
         ...BUTTON_BASE_PROPS,
@@ -1641,6 +1795,7 @@
       Utils.applyStyles(settingsButton, {
         ...BUTTON_BASE_PROPS,
         ...BUTTON_SPACING_PROPS,
+        fontSize: "8px",
       });
       settingsButton.addEventListener("click", () => {
         const currentFormat = GM_getValue(
